@@ -3,5 +3,9 @@ __pycache__/
 .pytest_cache/
 venv/
 *.pyc
-*.md
+test_*.py
+.venv/
+.vscode/
 reports/
+HUONG_DAN_SU_DUNG.md
+project_analysis.md
