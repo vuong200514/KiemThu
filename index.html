@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutoTest — CFG-Driven Test Generator</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/standalone/umd/vis-network.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/dist/vis-network.min.css">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root{
+  --bg:#0b0e14; --panel:#11151c; --panel2:#161b24; --border:#232936;
+  --text:#c5cad3; --text-dim:#6b7280; --text-hi:#f3f5f7;
+  --accent:#5b9dff; --green:#3fd17e; --amber:#e8b339; --red:#f0556d; --purple:#a98bff;
+  --mono:'JetBrains Mono', monospace; --sans:'Inter', sans-serif;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+html,body{height:100%; background:var(--bg); color:var(--text); font-family:var(--sans); font-size:14px; overflow:hidden;}
+
+#app{display:flex; height:100vh;}
+
+/* ── LEFT: project panel ── */
+#left{width:300px; min-width:300px; background:var(--panel); border-right:1px solid var(--border); display:flex; flex-direction:column;}
+#left-head{padding:18px 16px 14px; border-bottom:1px solid var(--border);}
+#left-head h1{font-size:.95rem; font-weight:700; color:var(--text-hi); display:flex; align-items:center; gap:8px;}
+#left-head h1 .dot{width:8px; height:8px; border-radius:50%; background:var(--accent);}
+#folder-form{padding:14px 16px; border-bottom:1px solid var(--border); display:flex; flex-direction:column; gap:8px;}
+#folder-input{width:100%; background:var(--panel2); border:1px solid var(--border); border-radius:6px; padding:9px 10px; color:var(--text-hi); font-family:var(--mono); font-size:.8rem;}
+#folder-input:focus{outline:none; border-color:var(--accent);}
+#scan-btn{background:var(--accent); color:#0b0e14; border:none; border-radius:6px; padding:9px; font-weight:600; font-size:.82rem; cursor:pointer;}
+#scan-btn:hover{filter:brightness(1.1);}
+#scan-btn:disabled{opacity:.5; cursor:default;}
+#scan-status{font-size:.75rem; color:var(--text-dim); min-height:16px;}
+#scan-status.err{color:var(--red);}
+
+#legend{padding:12px 16px; border-bottom:1px solid var(--border); font-size:.72rem; color:var(--text-dim); display:flex; flex-direction:column; gap:6px;}
+.legend-row{display:flex; align-items:center; gap:7px;}
+.legend-dot{width:9px; height:9px; border-radius:50%; flex-shrink:0;}
+
+#file-list{flex:1; overflow-y:auto; padding:8px;}
+.file-item{padding:7px 10px; border-radius:6px; font-family:var(--mono); font-size:.78rem; color:var(--text-dim); cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.file-item:hover{background:var(--panel2); color:var(--text);}
+.file-item.active{background:rgba(91,157,255,.12); color:var(--accent);}
+
+/* ── CENTER: graph ── */
+#center{flex:1; display:flex; flex-direction:column; min-width:0;}
+#center-bar{height:48px; border-bottom:1px solid var(--border); display:flex; align-items:center; padding:0 16px; gap:14px; background:var(--panel); flex-shrink:0;}
+#breadcrumb{font-family:var(--mono); font-size:.8rem; color:var(--text-dim);}
+#breadcrumb b{color:var(--text-hi);}
+#graph-host{flex:1; position:relative; background:#0a0c11;}
+#network{position: absolute; inset: 0; width: 100%; height: 100%;}
+#empty-state{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:10px; color:var(--text-dim); text-align:center;}
+#empty-state .big{font-size:2.2rem; opacity:.3;}
+
+/* ── RIGHT: detail panel ── */
+#right{width:440px; min-width:440px; background:var(--panel); border-left:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden;}
+#right-head{padding:16px; border-bottom:1px solid var(--border);}
+#right-head h2{font-size:.95rem; color:var(--text-hi); font-family:var(--mono); word-break:break-all;}
+#right-head .sub{font-size:.72rem; color:var(--text-dim); margin-top:3px;}
+#right-body{flex:1; overflow-y:auto; padding:16px;}
+#right-empty{color:var(--text-dim); font-size:.85rem; padding:30px 16px; text-align:center; line-height:1.6;}
+
+.section{margin-bottom:18px;}
+.section h3{font-size:.72rem; text-transform:uppercase; letter-spacing:.04em; color:var(--text-dim); margin-bottom:8px; font-weight:600;}
+.fn-row{display:flex; align-items:center; justify-content:space-between; padding:8px 10px; border-radius:6px; background:var(--panel2); margin-bottom:5px; cursor:pointer; border:1px solid transparent;}
+.fn-row:hover{border-color:var(--accent);}
+.fn-name{font-family:var(--mono); font-size:.8rem; color:var(--text-hi);}
+.fn-meta{font-size:.68rem; color:var(--text-dim); margin-left:6px;}
+
+.btn{display:inline-flex; align-items:center; gap:6px; background:var(--panel2); border:1px solid var(--border); color:var(--text); padding:8px 14px; border-radius:6px; font-size:.78rem; cursor:pointer; font-family:var(--sans);}
+.btn:hover{border-color:var(--accent); color:var(--text-hi);}
+.btn-primary{background:var(--accent); color:#0b0e14; border-color:var(--accent); font-weight:600;}
+.btn-primary:hover{filter:brightness(1.1);}
+.btn-primary:disabled{opacity:.5; cursor:default;}
+
+pre.code{background:#06080c; border:1px solid var(--border); border-radius:8px; padding:12px; font-family:var(--mono); font-size:.72rem; overflow-x:auto; white-space:pre-wrap; max-height:340px; color:#a8b3c2;}
+
+.cov-cards{display:flex; gap:8px;}
+.cov-card{flex:1; background:var(--panel2); border:1px solid var(--border); border-radius:8px; padding:10px 12px; text-align:center;}
+.cov-card .num{font-size:1.3rem; font-weight:700;}
+.cov-card .lbl{font-size:.65rem; color:var(--text-dim); text-transform:uppercase; margin-top:2px;}
+.good{color:var(--green);} .warn{color:var(--amber);} .bad{color:var(--red);}
+
+.spinner{width:14px; height:14px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; display:inline-block; vertical-align:middle; margin-right:6px;}
+@keyframes spin{to{transform:rotate(360deg);}}
+
+.cfg-canvas{width:100%; height:480px; background:#06080c; border:1px solid var(--border); border-radius:8px;}
+.cfg-canvas.fullscreen{position:fixed; inset:16px; width:auto; height:auto; z-index:1000; box-shadow:0 0 0 2000px rgba(0,0,0,.7);}
+#cfg-fullscreen-btn{margin-top:8px;}
+
+#report-link{display:inline-block; margin-top:8px; font-size:.78rem; color:var(--accent); text-decoration:none;}
+#report-link:hover{text-decoration:underline;}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- LEFT -->
+  <div id="left">
+    <div id="left-head"><h1><span class="dot"></span>AutoTest CFG</h1></div>
+    <div id="folder-form">
+      <input id="folder-input" type="text" placeholder="/path/to/project" />
+      <button id="scan-btn" onclick="scanProject()">Quét thư mục (server)</button>
+      <div style="text-align:center; color:var(--text-dim); font-size:.72rem; margin:2px 0;">— hoặc —</div>
+      <input id="zip-input" type="file" accept=".zip" style="display:none" onchange="uploadZip()" />
+      <button id="upload-btn" class="btn" style="width:100%; justify-content:center;" onclick="document.getElementById('zip-input').click()">⇪ Tải lên file .zip</button>
+      <div id="scan-status"></div>
+    </div>
+    <div id="legend">
+      <div class="legend-row"><span class="legend-dot" style="background:#4f46e5"></span>File</div>
+      <div class="legend-row"><span class="legend-dot" style="background:#0ea5e9"></span>Class</div>
+      <div class="legend-row"><span class="legend-dot" style="background:#6b7280"></span>Function / Method</div>
+    </div>
+    <div id="file-list"></div>
+  </div>
+
+  <!-- CENTER -->
+  <div id="center">
+    <div id="center-bar">
+      <div id="breadcrumb">Chưa quét thư mục nào</div>
+    </div>
+    <div id="graph-host">
+      <div id="network"></div>
+      <div id="empty-state">
+        <div class="big">⌁</div>
+        <div id="empty-state-text">Nhập đường dẫn thư mục hoặc tải file .zip lên,<br>sau đó chọn 1 file ở danh sách bên trái<br>để xem sơ đồ cấu trúc.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT -->
+  <div id="right">
+    <div id="right-head"><h2 id="right-title">—</h2><div class="sub" id="right-sub"></div></div>
+    <div id="right-body">
+      <div id="right-empty">Chọn một node (file hoặc hàm) trên sơ đồ để xem chi tiết.</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const API = "";
+let network = null;
+let currentFile = null;
+
+let allProjectData = null; // lưu lại toàn bộ nodes/edges để lọc theo file khi click
+
+function applyScanResult(data, label){
+  statusEl_setSuccess(`✓ ${data.file_count} file, ${data.node_count} node`);
+  allProjectData = data;
+  document.getElementById('breadcrumb').innerHTML = `<b>${escapeHtml(label)}</b> — chọn 1 file để xem sơ đồ`;
+  renderFileList(data);
+  document.getElementById('empty-state').style.display = 'flex';
+  document.getElementById('network').innerHTML = '';
+  if(network){ network.destroy(); network = null; }
+}
+
+function statusEl_setSuccess(text){
+  const statusEl = document.getElementById('scan-status');
+  statusEl.textContent = text; statusEl.className = '';
+}
+
+async function uploadZip(){
+  const input = document.getElementById('zip-input');
+  const file = input.files[0];
+  if(!file) return;
+  const statusEl = document.getElementById('scan-status');
+
+  statusEl.innerHTML = '<span class="spinner"></span>Đang tải lên & giải nén...'; statusEl.className='';
+  document.getElementById('upload-btn').disabled = true;
+
+  try{
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const res = await fetch(API+'/api/upload-zip', { method:'POST', body: formData });
+    const data = await res.json();
+
+    if(data.status !== 'success'){
+      statusEl.textContent = data.message || 'Lỗi xử lý file zip.'; statusEl.className='err';
+      return;
+    }
+
+    // root_dir trả về là đường dẫn trên server sau khi giải nén — lưu lại để dùng cho các API khác
+    document.getElementById('folder-input').value = data.root_dir;
+    applyScanResult(data, file.name);
+
+  }catch(e){
+    console.error('uploadZip error:', e);
+    statusEl.textContent = "Lỗi: " + (e.message || e); statusEl.className='err';
+  }finally{
+    document.getElementById('upload-btn').disabled = false;
+    input.value = '';
+  }
+}
+
+async function scanProject(){
+  const folder = document.getElementById('folder-input').value.trim();
+  const statusEl = document.getElementById('scan-status');
+  if(!folder){ statusEl.textContent = "Nhập đường dẫn thư mục."; statusEl.className='err'; return; }
+
+  statusEl.innerHTML = '<span class="spinner"></span>Đang quét...'; statusEl.className='';
+  document.getElementById('scan-btn').disabled = true;
+
+  try{
+    const res = await fetch(API+'/api/scan-project', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({folder_path: folder})
+    });
+    const data = await res.json();
+    if(data.status !== 'success'){
+      statusEl.textContent = data.message || 'Lỗi quét thư mục.'; statusEl.className='err';
+      return;
+    }
+    applyScanResult(data, folder);
+  }catch(e){
+    console.error('scanProject error:', e);
+    statusEl.textContent = "Lỗi: " + (e.message || e); statusEl.className='err';
+  }finally{
+    document.getElementById('scan-btn').disabled = false;
+  }
+}
+
+function renderFileList(data){
+  const list = document.getElementById('file-list');
+  list.innerHTML = '';
+  const files = data.nodes.filter(n => n.type === 'file');
+  for(const f of files){
+    const div = document.createElement('div');
+    div.className = 'file-item';
+    div.textContent = f.label;
+    div.title = f.id;
+    div.onclick = () => selectFile(f, div);
+    list.appendChild(div);
+  }
+}
+
+function selectFile(fileNode, divEl){
+  document.querySelectorAll('.file-item.active').forEach(el => el.classList.remove('active'));
+  if(divEl) divEl.classList.add('active');
+
+  document.getElementById('breadcrumb').innerHTML = `<b>${escapeHtml(fileNode.label)}</b> — sơ đồ cấu trúc file`;
+
+  // Lọc ra node thuộc file này: chính file node + mọi node có id bắt đầu bằng "fileId::"
+  const fileNodes = allProjectData.nodes.filter(n =>
+    n.id === fileNode.id || n.id.startsWith(fileNode.id + '::')
+  );
+  const fileNodeIds = new Set(fileNodes.map(n => n.id));
+  const fileEdges = allProjectData.edges.filter(e =>
+    fileNodeIds.has(e.from) && fileNodeIds.has(e.to)
+  );
+
+  renderGraph(fileNodes, fileEdges, 'overview');
+  openFileDetail(fileNode.file_path, fileNode.id);
+}
+
+function renderGraph(nodes, edges, mode){
+  if(typeof vis === 'undefined'){
+    throw new Error('Thư viện vis-network chưa load được (có thể do mạng chặn cdnjs.cloudflare.com). Kiểm tra kết nối Internet hoặc dùng file vis-network local.');
+  }
+  document.getElementById('empty-state').style.display = 'none';
+  const colorOf = (n) => {
+    if(n.type === 'file') return '#4f46e5';
+    if(n.type === 'class') return '#0ea5e9';
+    if(n.type === 'entry') return '#3fd17e';
+    if(n.type === 'exit') return '#f0556d';
+    if(n.type === 'condition') return '#e8b339';
+    if(n.type === 'loop') return '#a98bff';
+    if(n.type === 'exception') return '#f0556d';
+    if(n.type === 'return') return '#5b9dff';
+    return '#6b7280';
+  };
+  const shapeOf = (n) => {
+    if(n.type === 'file') return 'box';
+    if(n.type === 'condition') return 'diamond';
+    if(['entry','exit','return'].includes(n.type)) return 'ellipse';
+    return n.type === 'class' ? 'ellipse' : 'dot';
+  };
+
+  const visNodes = nodes.map(n => ({
+    id: n.id,
+    label: n.label,
+    shape: shapeOf(n),
+    color: { background: colorOf(n), border:'#1e293b', highlight:{background: colorOf(n), border:'#fff'} },
+    font: { color:'#f3f5f7', face:'Inter', size: mode==='cfg' ? 12 : 14 },
+    size: n.type === 'file' ? 34 : (n.type === 'class' ? 26 : 18),
+    borderWidth: 2,
+  }));
+  const visEdges = edges.map(e => ({
+    from: e.from, to: e.to, label: e.label && e.label !== 'calls' ? e.label : '',
+    arrows: 'to',
+    color: { color: e.label === 'False' ? '#f0556d' : (e.label === 'True' ? '#3fd17e' : '#4b5563') },
+    width: 1.5,
+    font: { color:'#9ca3af', size:10, strokeWidth:0 },
+    dashes: e.label === 'calls',
+    smooth: { type:'cubicBezier', forceDirection:'vertical', roundness:0.4 },
+  }));
+
+  if(network) network.destroy();
+  network = new vis.Network(document.getElementById('network'),
+    { nodes: new vis.DataSet(visNodes), edges: new vis.DataSet(visEdges) },
+    {
+      layout: { hierarchical: { enabled:true, direction:'UD', sortMethod:'directed', nodeSpacing: mode==='cfg'?120:140, treeSpacing:180 } },
+      physics: false,
+      interaction: { hover:true, tooltipDelay:150, zoomView:true, dragView:true },
+    }
+  );
+
+  // Hierarchical layout tính vị trí node bất đồng bộ; chỉ fit() sau khi 'stabilized'
+  // bắn ra (hoặc afterDrawing như fallback) thì vị trí mới chính xác để zoom đúng khung.
+  let didFit = false;
+  const doFit = () => { if(!didFit){ didFit = true; network.fit({ animation:false }); } };
+  network.once('stabilized', doFit);
+  network.once('afterDrawing', doFit);
+  setTimeout(doFit, 300); // fallback cuối cùng nếu cả 2 event trên không bắn (project rất nhỏ)
+
+  if(mode === 'overview'){
+    network.on('click', (params) => {
+      if(!params.nodes.length) return;
+      const node = nodes.find(n => n.id === params.nodes[0]);
+      if(!node) return;
+      if(node.type === 'file') openFileDetail(node.file_path, node.id);
+      else if(node.type === 'function' || node.type === 'method') openFunctionDetail(node.file_path, node.label);
+      else if(node.type === 'class') openFileDetail(node.file_path, node.id);
+    });
+  }
+}
+
+async function openFileDetail(filePath, displayId){
+  currentFile = filePath;
+  document.getElementById('right-title').textContent = displayId.split('/').pop();
+  document.getElementById('right-sub').textContent = filePath;
+  setRightBody('<span class="spinner"></span>Đang phân tích file...');
+
+  const res = await fetch(API+'/api/file-detail', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({file_path: filePath})
+  });
+  const data = await res.json();
+  if(data.status !== 'success'){
+    setRightBody(`<div class="section"><p style="color:var(--red)">${escapeHtml(data.message||'Lỗi phân tích')}</p></div>`);
+    return;
+  }
+
+  let html = `<div class="section"><h3>Tổng quan</h3>
+    <div class="cov-cards">
+      <div class="cov-card"><div class="num">${data.functions_count}</div><div class="lbl">Hàm/Method</div></div>
+      <div class="cov-card"><div class="num">${data.classes_count}</div><div class="lbl">Class</div></div>
+      <div class="cov-card"><div class="num">${data.imports.length}</div><div class="lbl">Import</div></div>
+    </div>
+  </div>`;
+
+  if(data.functions.length){
+    html += `<div class="section"><h3>Hàm (top-level)</h3>`;
+    for(const fn of data.functions){ html += fnRow(fn, filePath); }
+    html += `</div>`;
+  }
+
+  for(const cls of data.classes){
+    html += `<div class="section"><h3>Class: ${escapeHtml(cls.name)}</h3>`;
+    for(const m of cls.methods){ html += fnRow(m, filePath); }
+    html += `</div>`;
+  }
+
+  html += `<div class="section"><h3>Kiểm thử AI cho toàn file</h3>
+    <button class="btn btn-primary" onclick="runAITest(null)">⚙ Sinh test (Ollama) cho cả file</button>
+    <div id="whole-file-test-result"></div>
+  </div>`;
+
+  setRightBody(html);
+}
+
+function fnRow(fn, filePath){
+  return `<div class="fn-row" onclick='openFunctionDetail(${JSON.stringify(filePath)}, ${JSON.stringify(fn.name)})'>
+      <span class="fn-name">${escapeHtml(fn.name)}()</span>
+      <span class="fn-meta">dòng ${fn.lineno}${fn.is_async ? ' · async' : ''}</span>
+    </div>`;
+}
+
+async function openFunctionDetail(filePath, funcName){
+  currentFile = filePath;
+  document.getElementById('right-title').textContent = funcName + '()';
+  document.getElementById('right-sub').textContent = filePath;
+  setRightBody('<span class="spinner"></span>Đang dựng CFG...');
+
+  const res = await fetch(API+'/api/cfg', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({file_path: filePath, func_name: funcName})
+  });
+  const cfg = await res.json();
+
+  let html = '';
+  if(cfg.status === 'success'){
+    html += `<div class="section"><h3>Control Flow Graph</h3>
+      <div class="cov-cards">
+        <div class="cov-card"><div class="num">${cfg.complexity}</div><div class="lbl">Cyclomatic complexity</div></div>
+        <div class="cov-card"><div class="num">${cfg.nodes.length}</div><div class="lbl">CFG node</div></div>
+      </div>
+      <div id="cfg-canvas" class="cfg-canvas" style="margin-top:10px;"></div>
+      <button class="btn" id="cfg-fullscreen-btn" onclick="toggleCfgFullscreen()">⛶ Phóng to toàn màn hình</button>
+    </div>`;
+  } else {
+    html += `<div class="section"><p style="color:var(--red)">${escapeHtml(cfg.message||'Không dựng được CFG')}</p></div>`;
+  }
+
+  html += `<div class="section"><h3>Kiểm thử với AI (Ollama qwen2.5-coder:7b)</h3>
+    <p style="font-size:.78rem;color:var(--text-dim);margin-bottom:8px;">
+      Test sẽ được sinh để bao phủ từng nhánh trong CFG ở trên, sau đó chạy và đo statement + branch coverage.
+    </p>
+    <button class="btn btn-primary" id="run-ai-btn" onclick="runAITest('${escapeJs(funcName)}')">⚙ Sinh &amp; chạy test cho hàm này</button>
+    <div id="func-test-result"></div>
+  </div>`;
+
+  setRightBody(html);
+
+  if(cfg.status === 'success'){
+    renderCFGMini(cfg);
+  }
+}
+
+let cfgNetwork = null;
+
+function renderCFGMini(cfg){
+  const host = document.getElementById('cfg-canvas');
+  if(!host) return;
+  const colorOf = (t) => ({
+    entry:'#3fd17e', exit:'#f0556d', condition:'#e8b339', loop:'#a98bff',
+    exception:'#f0556d', return:'#5b9dff', statement:'#6b7280',
+  }[t] || '#6b7280');
+  const visNodes = cfg.nodes.map(n => ({
+    id:n.id, label:n.label, shape: n.type==='condition' ? 'diamond' : 'box',
+    color:{background:colorOf(n.type), border:'#1e293b'},
+    font:{color:'#0b0e14', size:12, face:'JetBrains Mono'},
+    margin:8,
+  }));
+  const visEdges = cfg.edges.map(e => ({
+    from:e.from, to:e.to, label:e.label||'', arrows:'to',
+    color:{color: e.label==='False' ? '#f0556d' : (e.label==='True' ? '#3fd17e' : '#4b5563')},
+    width: 1.5,
+    font:{color:'#9ca3af', size:10, strokeWidth:0},
+  }));
+  if(cfgNetwork) cfgNetwork.destroy();
+  cfgNetwork = new vis.Network(host, {nodes:new vis.DataSet(visNodes), edges:new vis.DataSet(visEdges)}, {
+    layout:{hierarchical:{enabled:true, direction:'UD', sortMethod:'directed', nodeSpacing:110, treeSpacing:80}},
+    physics:false, interaction:{dragView:true, zoomView:true},
+  });
+  let didFit = false;
+  const doFit = () => { if(!didFit){ didFit = true; cfgNetwork.fit({ animation:false }); } };
+  cfgNetwork.once('stabilized', doFit);
+  cfgNetwork.once('afterDrawing', doFit);
+  setTimeout(doFit, 300);
+}
+
+function toggleCfgFullscreen(){
+  const host = document.getElementById('cfg-canvas');
+  const btn = document.getElementById('cfg-fullscreen-btn');
+  if(!host) return;
+  host.classList.toggle('fullscreen');
+  btn.textContent = host.classList.contains('fullscreen') ? '✕ Đóng' : '⛶ Phóng to toàn màn hình';
+  setTimeout(() => { if(cfgNetwork){ cfgNetwork.redraw(); cfgNetwork.fit({ animation:false }); } }, 50);
+}
+
+async function runAITest(funcName){
+  const targetEl = funcName ? document.getElementById('func-test-result') : document.getElementById('whole-file-test-result');
+  const btn = document.getElementById('run-ai-btn');
+  if(btn) btn.disabled = true;
+  targetEl.innerHTML = '<div style="margin-top:10px;"><span class="spinner"></span>Đang gọi Ollama sinh test case (có thể mất 30-90s)...</div>';
+
+  try{
+    let res;
+    if(funcName){
+      res = await fetch(API+'/api/test-function', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({file_path: currentFile, func_name: funcName})
+      });
+    } else {
+      res = await fetch(API+'/api/test-file', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({file_path: currentFile})
+      });
+    }
+    const data = await res.json();
+
+    if(data.status !== 'success'){
+      targetEl.innerHTML = `<p style="color:var(--red); margin-top:10px;">${escapeHtml(data.message||'Lỗi sinh test')}</p>`;
+      return;
+    }
+
+    const exec = data.exec_result;
+    const covFiles = (exec.coverage && exec.coverage.files) || {};
+    const cov = Object.values(covFiles)[0] || (exec.coverage && exec.coverage.overall) || null;
+    const hasCoverage = !!cov;
+    const stmtPct = hasCoverage ? cov.statement_coverage_pct : null;
+    const branchPct = hasCoverage ? cov.branch_coverage_pct : null;
+    const statusClass = exec.status === 'passed' ? 'good' : (exec.status === 'failed' ? 'bad' : 'warn');
+    const coverageValue = (pct) => pct === null || pct === undefined
+      ? `<div class="num warn">N/A</div>`
+      : `<div class="num ${pctClass(pct)}">${pct.toFixed(1)}%</div>`;
+
+    let html = `<div style="margin-top:12px;">
+      <div class="cov-cards">
+        <div class="cov-card"><div class="num ${statusClass}">${escapeHtml(exec.status)}</div><div class="lbl">Pytest</div></div>
+        <div class="cov-card">${coverageValue(stmtPct)}<div class="lbl">Statement</div></div>
+        <div class="cov-card">${coverageValue(branchPct)}<div class="lbl">Branch</div></div>
+      </div>`;
+
+    if(data.report_url){
+      html += `<a id="report-link" href="${data.report_url}" target="_blank">↗ Mở báo cáo HTML đầy đủ</a>`;
+    }
+
+    html += `<h3 style="margin-top:14px;">Test code đã sinh</h3><pre class="code">${escapeHtml(data.test_code)}</pre>`;
+    html += `<h3 style="margin-top:14px;">Output pytest</h3><pre class="code">${escapeHtml(exec.output || '')}</pre>`;
+    html += `</div>`;
+
+    targetEl.innerHTML = html;
+  }catch(e){
+    targetEl.innerHTML = `<p style="color:var(--red); margin-top:10px;">Lỗi kết nối server.</p>`;
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
+function pctClass(pct){
+  if(pct >= 90) return 'good';
+  if(pct >= 60) return 'warn';
+  return 'bad';
+}
+
+function setRightBody(html){ document.getElementById('right-body').innerHTML = html; }
+function escapeHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escapeJs(s){ return String(s).replace(/'/g, "\\'"); }
+</script>
+</body>
+</html>

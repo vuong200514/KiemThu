@@ -1,520 +1,138 @@
-import ast 
-import json 
-import os 
-import re 
-import webbrowser 
-from typing import Dict ,List ,Tuple 
-
-
-
-
-# Tóm tắt: Không có docstring cho _module_name_from_path
-def _module_name_from_path (file_path :str )->str :
-    return os .path .splitext (os .path .basename (file_path ))[0 ]
-
-
-
-
-# Tóm tắt: Build AST graph nodes and edges.
-def analyze_calls (file_path :str )->Tuple [List [Dict ],List [Tuple [str ,str ]],Dict [str ,str ],str ]:
-    """Build AST graph nodes and edges.
-
-    Graph hierarchy:
-    - file node
-    - class nodes under file
-    - function/method nodes under file/class
-
-    Also returns:
-    - functions_map: map short names to function node ids
-    - module_name: source module name (e.g. sample)
-    """
-    with open (file_path ,'r',encoding ='utf-8')as f :
-        src =f .read ()
-
-    tree =ast .parse (src )
-    module =_module_name_from_path (file_path )
-    file_label =os .path .basename (file_path )
-
-    nodes :List [Dict ]=[]
-    edges :List [Tuple [str ,str ]]=[]
-    functions_map :Dict [str ,str ]={}
-
-    file_id =module 
-    nodes .append ({
-    'id':file_id ,
-    'label':file_label ,
-    'type':'file',
-    'lineno':None ,
-    })
-
-    id_to_ast :Dict [str ,ast .AST ]={}
-
-    for node in tree .body :
-        if isinstance (node ,ast .FunctionDef ):
-            fid =f"{module}::{node.name}"
-            nodes .append ({
-            'id':fid ,
-            'label':node .name ,
-            'type':'function',
-            'lineno':getattr (node ,'lineno',None ),
-            })
-            edges .append ((file_id ,fid ))
-            functions_map [node .name ]=fid 
-            id_to_ast [fid ]=node 
-
-        if isinstance (node ,ast .ClassDef ):
-            cid =f"{module}::{node.name}"
-            nodes .append ({
-            'id':cid ,
-            'label':node .name ,
-            'type':'class',
-            'lineno':getattr (node ,'lineno',None ),
-            })
-            edges .append ((file_id ,cid ))
-
-            for sub in node .body :
-                if isinstance (sub ,ast .FunctionDef ):
-                    mid =f"{cid}::{sub.name}"
-                    nodes .append ({
-                    'id':mid ,
-                    'label':sub .name ,
-                    'type':'method',
-                    'lineno':getattr (sub ,'lineno',None ),
-                    })
-                    edges .append ((cid ,mid ))
-                    functions_map [sub .name ]=mid 
-                    functions_map [f"{node.name}::{sub.name}"]=mid 
-                    id_to_ast [mid ]=sub 
-
-
-    existing_nodes ={n ['id']for n in nodes }
-    for caller_id ,ast_node in id_to_ast .items ():
-        for sub in ast .walk (ast_node ):
-            if not isinstance (sub ,ast .Call ):
-                continue 
-
-            callee_id =None 
-            if isinstance (sub .func ,ast .Name ):
-                callee_id =functions_map .get (sub .func .id )
-            elif isinstance (sub .func ,ast .Attribute ):
-                attr =sub .func .attr 
-                val =sub .func .value 
-                if isinstance (val ,ast .Name )and val .id ==module :
-                    callee_id =functions_map .get (attr )
-                else :
-                    callee_id =functions_map .get (attr )
-
-            if callee_id and callee_id in existing_nodes :
-                edges .append ((caller_id ,callee_id ))
-
-    return nodes ,edges ,functions_map ,module 
-
-
-
-
-# Tóm tắt: Extract test functions and map called functions using AST.
-def extract_tests (test_file_path :str ,functions_map :Dict [str ,str ],module_name :str )->Dict [str ,Dict ]:
-    """Extract test functions and map called functions using AST."""
-    with open (test_file_path ,'r',encoding ='utf-8')as f :
-        src =f .read ()
-
-    tree =ast .parse (src )
-    lines =src .splitlines ()
-    tests :Dict [str ,Dict ]={}
-
-
-
-# Tóm tắt: Không có docstring cho _collect_calls
-    def _collect_calls (fn_node :ast .FunctionDef )->List [str ]:
-        calls :List [str ]=[]
-        for sub in ast .walk (fn_node ):
-            if not isinstance (sub ,ast .Call ):
-                continue 
-
-            func_id =None 
-            if isinstance (sub .func ,ast .Name ):
-                func_id =functions_map .get (sub .func .id )
-            elif isinstance (sub .func ,ast .Attribute ):
-                attr =sub .func .attr 
-                val =sub .func .value 
-                if isinstance (val ,ast .Name )and val .id ==module_name :
-                    func_id =functions_map .get (attr )
-                else :
-                    func_id =functions_map .get (attr )
-
-            if func_id :
-                calls .append (func_id )
-
-
-        return list (dict .fromkeys (calls ))
-
-    for node in tree .body :
-        if isinstance (node ,ast .FunctionDef )and node .name .startswith ('test'):
-            start =node .lineno -1 
-            end =getattr (node ,'end_lineno',node .lineno )
-            tests [node .name ]={
-            'source':'\n'.join (lines [start :end ]),
-            'class':None ,
-            'calls':_collect_calls (node ),
-            }
-
-        if isinstance (node ,ast .ClassDef ):
-            for sub in node .body :
-                if isinstance (sub ,ast .FunctionDef )and sub .name .startswith ('test'):
-                    start =sub .lineno -1 
-                    end =getattr (sub ,'end_lineno',sub .lineno )
-                    tid =f"{node.name}::{sub.name}"
-                    tests [tid ]={
-                    'source':'\n'.join (lines [start :end ]),
-                    'class':node .name ,
-                    'calls':_collect_calls (sub ),
-                    }
-
-    return tests 
-
-
-
-
-# Tóm tắt: Không có docstring cho map_tests_to_functions
-def map_tests_to_functions (tests :Dict [str ,Dict ],functions_map :Dict [str ,str ])->Dict [str ,List [str ]]:
-    mapping ={fid :[]for fid in set (functions_map .values ())}
-    for tid ,info in tests .items ():
-        for fid in info .get ('calls',[]):
-            mapping .setdefault (fid ,[]).append (tid )
-    return mapping 
-
-
-
-
-# Tóm tắt: Parse pytest - v output lines into status map by test id and short id.
-def parse_pytest_output (output :str )->Dict [str ,str ]:
-    """Parse pytest -v output lines into status map by test id and short id."""
-    status :Dict [str ,str ]={}
-    stat_re =re .compile (r'\b(PASSED|FAILED|ERROR|XFAILED|XPASS|skipped)\b')
-
-    for line in output .splitlines ():
-        sline =line .strip ()
-        if not sline :
-            continue 
-
-        m =stat_re .search (sline )
-        if not m :
-            continue 
-
-        stat =m .group (1 )
-        tokens =sline .split ()
-        tid =None 
-        for t in tokens :
-            if '::'in t and t .startswith ('test_'):
-                tid =t 
-                break 
-            if t .startswith ('test_')and t .endswith ('.py'):
-                tid =t 
-                break 
-            if '::'in t and '.py::'in t :
-                tid =t 
-                break 
-
-        if not tid :
-            for t in tokens :
-                if '::'in t :
-                    tid =t 
-                    break 
-
-        if not tid :
-            continue 
-
-        tid =tid .rstrip (',:')
-        status [tid ]=stat 
-
-        if '::'in tid :
-            short =tid .split ('::')[-1 ]
-            status [short ]=stat 
-
-    return status 
-
-
-
-
-# Tóm tắt: Không có docstring cho _node_color
-def _node_color (status_counts :Dict [str ,int ],ntype :str )->str :
-    if ntype =='file':
-        return '#4f46e5'
-    if ntype =='class':
-        return '#0ea5e9'
-
-    if not status_counts :
-        return '#9ca3af'
-
-    if status_counts .get ('FAILED')or status_counts .get ('ERROR'):
-        return '#ef4444'
-
-    total =sum (status_counts .values ())
-    passed =status_counts .get ('PASSED',0 )
-    if total >0 and passed ==total :
-        return '#22c55e'
-
-    return '#f59e0b'
-
-
-
-
-# Tóm tắt: Không có docstring cho generate_report
-def generate_report (source_file :str ,test_file :str ,pytest_output :str ,out_dir :str ='reports')->str :
-    os .makedirs (out_dir ,exist_ok =True )
-
-    nodes ,edges ,functions_map ,module_name =analyze_calls (source_file )
-
-    tests :Dict [str ,Dict ]={}
-    test_path =test_file if os .path .exists (test_file )else os .path .join (os .getcwd (),test_file )
-    if os .path .exists (test_path ):
-        tests =extract_tests (test_path ,functions_map ,module_name )
-
-    mapping =map_tests_to_functions (tests ,functions_map )
-    statuses =parse_pytest_output (pytest_output or '')
-
-
-    function_node_ids =set (functions_map .values ())
-    for n in nodes :
-        nid =n ['id']
-        if nid in function_node_ids :
-            ntests =mapping .get (nid ,[])
-        else :
-            ntests =[]
-
-        status_counts :Dict [str ,int ]={}
-        for tid in ntests :
-            st =statuses .get (tid )or statuses .get (tid .split ('::')[-1 ])or 'unknown'
-            status_counts [st ]=status_counts .get (st ,0 )+1 
-
-        n ['tests']=ntests 
-        n ['test_count']=len (ntests )
-        n ['status_counts']=status_counts 
-        n ['color']=_node_color (status_counts ,n .get ('type','function'))
-
-    report_data ={
-    'nodes':nodes ,
-    'edges':[{'from':a ,'to':b }for a ,b in edges ],
-    'tests':tests ,
-    'pytest_output':pytest_output ,
+"""
+reporter.py — Sinh báo cáo HTML cho một lần kiểm thử (1 file hoặc 1 hàm).
+Hiển thị: kết quả pytest (pass/fail từng test), statement coverage,
+branch coverage, và danh sách dòng/nhánh còn thiếu.
+"""
+
+import json
+import os
+
+
+def generate_report(source_file: str, test_file: str, exec_result: dict,
+                     func_name: str = None, out_dir: str = "reports") -> str:
+    os.makedirs(out_dir, exist_ok=True)
+
+    pytest_output = exec_result.get("output", "")
+    coverage = exec_result.get("coverage") or {}
+    overall = coverage.get("overall", {})
+    files_cov = coverage.get("files", {})
+
+    src_basename = os.path.basename(source_file)
+    file_cov = files_cov.get(src_basename, {})
+
+    tests = _parse_test_results(pytest_output)
+
+    suffix = f"_{func_name}" if func_name else ""
+    html_path = os.path.join(out_dir, f"report_{src_basename}{suffix}.html")
+    json_path = os.path.join(out_dir, f"report_{src_basename}{suffix}.json")
+
+    report_data = {
+        "source_file": src_basename,
+        "func_name": func_name,
+        "status": exec_result.get("status"),
+        "tests": tests,
+        "coverage_overall": overall,
+        "coverage_file": file_cov,
+        "pytest_output": pytest_output,
     }
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(report_data, f, ensure_ascii=False, indent=2)
 
-    json_path =os .path .join (out_dir ,f"report_{os.path.basename(source_file)}.json")
-    html_path =os .path .join (out_dir ,f"report_{os.path.basename(source_file)}.html")
+    html = _render_html(report_data)
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(html)
 
-    with open (json_path ,'w',encoding ='utf-8')as jf :
-        json .dump (report_data ,jf ,ensure_ascii =False ,indent =2 )
+    return html_path
 
-    json_text =json .dumps (report_data )
-    safe_pytest =(pytest_output or '').replace ('&','&amp;').replace ('<','&lt;').replace ('>','&gt;')
 
-    html_template ='''<!doctype html>
+def _parse_test_results(output: str) -> list:
+    tests = []
+    for line in output.splitlines():
+        line = line.strip()
+        for status in ("PASSED", "FAILED", "ERROR"):
+            marker = f" {status}"
+            if marker in line and "::" in line:
+                name = line.split(marker)[0].strip()
+                tests.append({"name": name, "status": status})
+                break
+    return tests
+
+
+def _esc(s):
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def _render_html(data: dict) -> str:
+    tests = data["tests"]
+    passed = sum(1 for t in tests if t["status"] == "PASSED")
+    failed = sum(1 for t in tests if t["status"] in ("FAILED", "ERROR"))
+    total = len(tests)
+
+    stmt_pct = data["coverage_file"].get("statement_coverage_pct", data["coverage_overall"].get("statement_coverage_pct", 0))
+    branch_pct = data["coverage_file"].get("branch_coverage_pct", data["coverage_overall"].get("branch_coverage_pct", 0))
+    missing_lines = data["coverage_file"].get("missing_lines", [])
+
+    rows = "".join(
+        f'<tr class="{"ok" if t["status"]=="PASSED" else "bad"}">'
+        f'<td>{_esc(t["name"])}</td><td>{_esc(t["status"])}</td></tr>'
+        for t in tests
+    ) or '<tr><td colspan="2" class="muted">Không có test nào được phát hiện.</td></tr>'
+
+    title = f"{_esc(data['source_file'])}" + (f" :: {_esc(data['func_name'])}" if data["func_name"] else "")
+
+    return f"""<!doctype html>
 <html lang="vi">
 <head>
-  <meta charset="utf-8" />
-  <title>Báo Cáo AutoTestTool - {{FNAME}}</title>
-  <script type="text/javascript" src="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.js"></script>
-  <link href="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.css" rel="stylesheet" type="text/css" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <style>
-    :root {
-      --bg-color: #f8fafc;
-      --panel-bg: #ffffff;
-      --text-main: #0f172a;
-      --text-muted: #64748b;
-      --border-color: #e2e8f0;
-      --primary: #3b82f6;
-      --success-bg: #dcfce7;
-      --success-text: #166534;
-      --danger-bg: #fee2e2;
-      --danger-text: #991b1b;
-      --neutral-bg: #f1f5f9;
-      --neutral-text: #334155;
-    }
-    * { box-sizing: border-box; }
-    html, body { height: 100%; margin: 0; font-family: 'Inter', sans-serif; background-color: var(--bg-color); color: var(--text-main); }
-    body { display: flex; height: 100vh; overflow: hidden; }
-    #network { width: calc(100% - 480px); height: 100vh; background-color: #ffffff; }
-    #panel { width: 480px; padding: 24px; overflow-y: auto; height: 100vh; background-color: var(--panel-bg); border-left: 1px solid var(--border-color); box-shadow: -4px 0 15px rgba(0,0,0,0.03); z-index: 10; }
-    
-    h3, h4 { margin-top: 0; color: #1e293b; font-weight: 600; }
-    h3 { font-size: 1.25rem; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); }
-    h4 { font-size: 1.1rem; margin-top: 24px; margin-bottom: 12px; }
-    
-    #details { line-height: 1.6; color: var(--text-muted); }
-    #details b { color: var(--text-main); font-weight: 600; }
-    
-    pre { background: var(--neutral-bg); padding: 12px; border-radius: 8px; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.875rem; border: 1px solid var(--border-color); overflow-x: auto; color: #334155; }
-    
-    .badge { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 9999px; margin-right: 8px; margin-bottom: 8px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.025em; }
-    .ok { background: var(--success-bg); color: var(--success-text); }
-    .bad { background: var(--danger-bg); color: var(--danger-text); }
-    .unk { background: var(--neutral-bg); color: var(--neutral-text); }
-    
-    .info-grid { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin-bottom: 16px; font-size: 0.95rem; }
-    .info-label { color: var(--text-muted); }
-    
-    ul.test-list { list-style: none; padding: 0; margin: 0; }
-    ul.test-list li { margin-bottom: 16px; padding: 16px; border: 1px solid var(--border-color); border-radius: 8px; background: #fafafa; }
-    ul.test-list li b { display: block; margin-bottom: 8px; color: var(--primary); word-break: break-all; }
-    ul.test-list li i { display: inline-block; margin-bottom: 8px; font-style: normal; font-size: 0.8rem; font-weight: 600; padding: 2px 6px; border-radius: 4px; }
-    
-    .status-passed { background: var(--success-bg); color: var(--success-text); }
-    .status-failed { background: var(--danger-bg); color: var(--danger-text); }
-    .status-error { background: var(--danger-bg); color: var(--danger-text); }
-    .status-unknown { background: var(--neutral-bg); color: var(--neutral-text); }
-    
-    hr { border: 0; border-top: 1px solid var(--border-color); margin: 24px 0; }
-    
-    ::-webkit-scrollbar { width: 8px; height: 8px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
-    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-  </style>
+<meta charset="utf-8">
+<title>Báo cáo kiểm thử — {title}</title>
+<style>
+  :root {{ --bg:#0d1117; --panel:#161b22; --border:#30363d; --text:#c9d1d9; --muted:#6e7681;
+           --green:#3fb950; --red:#f85149; --accent:#58a6ff; }}
+  * {{ box-sizing: border-box; }}
+  body {{ font-family: 'Segoe UI', Inter, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 32px; }}
+  h1 {{ font-size: 1.3rem; margin-bottom: 4px; }}
+  .muted {{ color: var(--muted); }}
+  .cards {{ display: flex; gap: 16px; margin: 20px 0; flex-wrap: wrap; }}
+  .card {{ background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; min-width: 160px; }}
+  .card .num {{ font-size: 1.8rem; font-weight: 700; }}
+  .card .label {{ font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }}
+  .green {{ color: var(--green); }} .red {{ color: var(--red); }} .blue {{ color: var(--accent); }}
+  table {{ width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }}
+  th, td {{ padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); font-size: 0.9rem; }}
+  th {{ color: var(--muted); font-weight: 600; }}
+  tr.ok td:last-child {{ color: var(--green); font-weight: 600; }}
+  tr.bad td:last-child {{ color: var(--red); font-weight: 600; }}
+  pre {{ background: #010409; border: 1px solid var(--border); border-radius: 8px; padding: 14px; overflow-x: auto; font-size: 0.82rem; white-space: pre-wrap; }}
+  section {{ margin-top: 28px; }}
+</style>
 </head>
 <body>
-  <div id="network"></div>
-  <div id="panel">
-    <h3>Chi Tiết Node</h3>
-    <div id="details">
-      <p>Nhấn vào một node trên biểu đồ để xem chi tiết các bài kiểm thử và kết quả.</p>
-    </div>
-    <hr/>
-    <h4>Đầu ra Pytest</h4>
-    <pre id="pytest_output">{{PYTEST_OUTPUT}}</pre>
+  <h1>Báo cáo kiểm thử</h1>
+  <p class="muted">{title}</p>
+
+  <div class="cards">
+    <div class="card"><div class="num {'green' if failed==0 and total>0 else 'red'}">{passed}/{total}</div><div class="label">Test pass</div></div>
+    <div class="card"><div class="num blue">{stmt_pct:.1f}%</div><div class="label">Statement coverage</div></div>
+    <div class="card"><div class="num blue">{branch_pct:.1f}%</div><div class="label">Branch coverage</div></div>
   </div>
 
-  <script>
-    const data = {{DATA}};
+  <section>
+    <h3>Kết quả từng test</h3>
+    <table><thead><tr><th>Test</th><th>Trạng thái</th></tr></thead><tbody>{rows}</tbody></table>
+  </section>
 
-    const typeTranslations = {
-      'file': 'tệp',
-      'class': 'lớp',
-      'function': 'hàm',
-      'method': 'phương thức'
-    };
+  <section>
+    <h3>Dòng chưa được coverage</h3>
+    <p class="muted">{_esc(', '.join(str(l) for l in missing_lines)) if missing_lines else 'Không có — 100% statement coverage.'}</p>
+  </section>
 
-    const visNodes = data.nodes.map(n => {
-      const c = n.color || '#9ca3af';
-      const size = n.type === 'file' ? 38 : (n.type === 'class' ? 28 : 20);
-      const label = n.type === 'function' || n.type === 'method'
-        ? `${n.label}\\n(${n.test_count} kiểm thử)`
-        : n.label;
-      return {
-        id: n.id,
-        label,
-        color: { background: c, border: '#1e293b', highlight: { background: c, border: '#000000' } },
-        shape: n.type === 'file' ? 'box' : 'ellipse',
-        font: { color: '#0f172a', face: 'Inter', size: 14 },
-        shadow: { enabled: true, color: 'rgba(0,0,0,0.1)', size: 5, x: 2, y: 2 },
-        size,
-      };
-    });
-
-    const visEdges = data.edges.map(e => ({ 
-      ...e, 
-      arrows: 'to',
-      color: { color: '#cbd5e1', highlight: '#94a3b8' },
-      smooth: { type: 'cubicBezier', forceDirection: 'vertical', roundness: 0.4 }
-    }));
-
-    const container = document.getElementById('network');
-    const network = new vis.Network(
-      container,
-      { nodes: new vis.DataSet(visNodes), edges: new vis.DataSet(visEdges) },
-      {
-        layout: { hierarchical: { enabled: true, direction: 'UD', sortMethod: 'directed', nodeSpacing: 150, treeSpacing: 200 } },
-        physics: false,
-        interaction: { hover: true, tooltipDelay: 200 },
-      }
-    );
-
-    network.on('click', function(params) {
-      if (!params.nodes || params.nodes.length === 0) return;
-      const id = params.nodes[0];
-      const node = data.nodes.find(n => n.id === id);
-      const details = document.getElementById('details');
-
-      const nodeTypeVi = typeTranslations[node.type] || node.type || 'hàm';
-
-      let html = `<h4 style="margin-top: 0; word-break: break-all; color: var(--primary);">${escapeHtml(id)}</h4>`;
-      
-      html += `<div class="info-grid">`;
-      html += `<span class="info-label">Loại:</span> <b>${escapeHtml(nodeTypeVi)}</b>`;
-      html += `<span class="info-label">Dòng:</span> <b>${node.lineno || 'N/A'}</b>`;
-      html += `<span class="info-label">Kiểm thử:</span> <b>${node.test_count || 0} bài</b>`;
-      html += `</div>`;
-
-      const counts = node.status_counts || {};
-      const passed = counts.PASSED || 0;
-      const failed = (counts.FAILED || 0) + (counts.ERROR || 0);
-      const unknown = counts.unknown || 0;
-      
-      html += `<div>`;
-      if (passed > 0 || (passed === 0 && failed === 0 && unknown === 0)) {
-         html += `<span class="badge ok">ĐẠT: ${passed}</span>`;
-      }
-      if (failed > 0) {
-         html += `<span class="badge bad">LỖI/THẤT BẠI: ${failed}</span>`;
-      }
-      if (unknown > 0) {
-         html += `<span class="badge unk">KHÔNG RÕ: ${unknown}</span>`;
-      }
-      html += `</div>`;
-
-      const tests = node.tests || [];
-      if (tests.length > 0) {
-        html += '<hr/><h4>Các Bài Kiểm Thử</h4><ul class="test-list">';
-        for (const tid of tests) {
-          const t = data.tests[tid] || { source: 'N/A' };
-          const short = tid.includes('::') ? tid.split('::').slice(-1)[0] : tid;
-          let st = countsFromOutput(tid, short);
-          
-          let stVi = st;
-          let stClass = 'status-unknown';
-          if (st === 'PASSED') { stVi = 'ĐẠT'; stClass = 'status-passed'; }
-          else if (st === 'FAILED') { stVi = 'THẤT BẠI'; stClass = 'status-failed'; }
-          else if (st === 'ERROR') { stVi = 'LỖI'; stClass = 'status-error'; }
-          else { stVi = 'KHÔNG RÕ'; }
-
-          html += `<li><b>${escapeHtml(tid)}</b> <i class="${stClass}">${escapeHtml(stVi)}</i><pre>${escapeHtml(t.source || '')}</pre></li>`;
-        }
-        html += '</ul>';
-      } else {
-        html += '<hr/><div><p style="color: var(--text-muted); font-style: italic;">Không có bài kiểm thử nào được ánh xạ tới node này.</p></div>';
-      }
-
-      details.innerHTML = html;
-    });
-
-    function countsFromOutput(tid, short) {
-      const text = data.pytest_output || '';
-      if (text.includes(tid + ' PASSED') || text.includes(short + ' PASSED')) return 'PASSED';
-      if (text.includes(tid + ' FAILED') || text.includes(short + ' FAILED')) return 'FAILED';
-      if (text.includes(tid + ' ERROR') || text.includes(short + ' ERROR')) return 'ERROR';
-      return 'unknown';
-    }
-
-    function escapeHtml(s) {
-      return String(s)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-    }
-  </script>
+  <section>
+    <h3>Đầu ra Pytest</h3>
+    <pre>{_esc(data['pytest_output'])}</pre>
+  </section>
 </body>
-</html>
-'''
-
-    html =html_template .replace ('{{DATA}}',json_text )
-    html =html .replace ('{{PYTEST_OUTPUT}}',safe_pytest )
-    html =html .replace ('{{FNAME}}',os .path .basename (source_file ))
-
-    with open (html_path ,'w',encoding ='utf-8')as hf :
-        hf .write (html )
-
-    return html_path 
+</html>"""
 
 
-if __name__ =='__main__':
-    print ('Use generate_report(source_file, test_file, pytest_output).')
+if __name__ == "__main__":
+    print("Use generate_report(source_file, test_file, exec_result, func_name=None).")

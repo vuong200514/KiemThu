@@ -9,3 +9,4 @@ test_*.py
 reports/
 HUONG_DAN_SU_DUNG.md
 project_analysis.md
+*.md

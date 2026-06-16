@@ -4,12 +4,12 @@ Giới thiệu ngắn
 ----------------
 AutoTestTool là một bộ công cụ nhỏ giúp tự động sinh và chạy unit test cho file mã nguồn Python. Quy trình chính:
 - Phân tích tĩnh file nguồn (đếm hàm/lớp).
-- Gọi API AI (Gemini) để sinh mã test (định dạng `unittest`).
+- Gọi Ollama local để sinh mã test (định dạng `unittest`).
 - Lưu file test do AI sinh và chạy bằng `pytest`.
 
 Cấu trúc chính
 --------------
-- `ai_generator.py`: Gọi API Google Generative AI (Gemini) để sinh test case từ source code. Đọc biến `GEMINI_API_KEY` từ file `.env`.
+- `ai_generator.py`: Gọi Ollama để sinh test case từ source code. Model mặc định là `qwen2.5-coder:7b`, có thể đổi bằng biến môi trường `OLLAMA_MODEL`.
 - `analyzer.py`: Phân tích tĩnh file Python bằng `ast`, trả về số hàm và lớp và bắt lỗi cú pháp.
 - `executor.py`: Chạy file test bằng `pytest` và trả về output cùng trạng thái (passed/failed/error).
 - `main.py`: CLI điều phối toàn bộ pipeline — nhận file nguồn, phân tích, gọi AI, tạo file test, chạy test và in kết quả bằng `rich`.
@@ -44,14 +44,15 @@ rich
 pytest
 ```
 
-Lưu ý: Nếu không dùng AI, `ai_generator.py` sẽ trả lỗi nếu `GEMINI_API_KEY` chưa được đặt.
+Lưu ý: Cần chạy `ollama serve` và tải model bằng `ollama pull qwen2.5-coder:7b`.
 
 Cấu hình `.env`
 ----------------
 Tạo file `.env` ở thư mục gốc với dòng:
 
 ```
-GEMINI_API_KEY=sk-...   # khóa API Gemini của bạn
+OLLAMA_MODEL=qwen2.5-coder:7b
+OLLAMA_API_URL=http://localhost:11434/api/generate
 ```
 
 Cách dùng
@@ -72,7 +73,7 @@ Hoạt động chi tiết theo file
 ---------------------------
 - `ai_generator.py`:
   - Hàm chính: `generate_test_cases(file_path)`
-  - Đọc file, dựng prompt cho Gemini, yêu cầu AI trả về mã `unittest` thuần túy.
+  - Đọc file, dựng prompt cho Ollama, yêu cầu AI trả về mã `unittest` thuần túy.
   - Trả về dict với `status` và `test_code` hoặc `message` khi có lỗi.
 
 - `analyzer.py`:
