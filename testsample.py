@@ -1,30 +1,15 @@
 class Triangle:
     @staticmethod
     def classify(a, b, c):
-        sides = sorted([a, b, c])
-
-        if any(x <= 0 for x in sides):
+        if a <= 0 or b <= 0 or c <= 0:
             return "Invalid"
 
-        x, y, z = sides
-
-        if x + y <= z:
+        if a + b <= c or a + c <= b or b + c <= a:
             return "Not a triangle"
 
-        distinct = len(set(sides))
-
-        if distinct == 1:
+        if a == b and b == c:
             return "Equilateral"
-
-        perimeter = x + y + z
-
-        if distinct == 2:
-            if perimeter % 2 == 0:
-                return "Isosceles"
-            else:
-                return "Isosceles"
-
-        if x * x + y * y == z * z:
+        elif a == b or b == c or a == c:
+            return "Isosceles"
+        else:
             return "Scalene"
-
-        return "Scalene"
